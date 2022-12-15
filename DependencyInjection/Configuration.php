@@ -155,6 +155,7 @@ class Configuration implements ConfigurationInterface
             ->fixXmlConfig('replica')
             ->fixXmlConfig('shard')
             ->fixXmlConfig('default_table_option')
+            ->append($this->getOrmCacheDriverNode('result_cache_driver'))
             ->children()
                 ->scalarNode('driver')->defaultValue('pdo_mysql')->end()
                 ->scalarNode('platform_service')->end()

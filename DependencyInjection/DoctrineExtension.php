@@ -10,6 +10,7 @@ use Doctrine\Bundle\DoctrineBundle\Dbal\ManagerRegistryAwareConnectionProvider;
 use Doctrine\Bundle\DoctrineBundle\Dbal\RegexSchemaAssetFilter;
 use Doctrine\Bundle\DoctrineBundle\DependencyInjection\Compiler\IdGeneratorPass;
 use Doctrine\Bundle\DoctrineBundle\DependencyInjection\Compiler\ServiceRepositoryCompilerPass;
+use Doctrine\Bundle\DoctrineBundle\DependencyInjection\Compiler\DbalCacheCompatibilityPass;
 use Doctrine\Bundle\DoctrineBundle\EventSubscriber\EventSubscriberInterface;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepositoryInterface;
 use Doctrine\DBAL\Connection;
@@ -198,7 +199,14 @@ class DoctrineExtension extends AbstractDoctrineExtension
     protected function loadDbalConnection($name, array $connection, ContainerBuilder $container)
     {
         $configuration = $container->setDefinition(sprintf('doctrine.dbal.%s_connection.configuration', $name), new ChildDefinition('doctrine.dbal.connection.configuration'));
+        $configuration->addTag(DbalCacheCompatibilityPass::CONFIGURATION_TAG);
         $logger        = null;
+
+        $this->loadDbalCacheDrivers($name, $connection, $container);
+        if (isset($connection['result_cache_driver'])) {
+            $configuration->addMethodCall('setResultCache', [new Reference($this->getDbalElementName(sprintf('%s_%s', $name, 'result_cache')))]);
+        }
+
 
         /** @psalm-suppress UndefinedClass */
         if (! interface_exists(MiddlewareInterface::class) && $connection['logging']) {
@@ -1045,6 +1053,46 @@ class DoctrineExtension extends AbstractDoctrineExtension
 
         $this->loadCacheDriver('result_cache', $entityManager['name'], $entityManager['result_cache_driver'], $container);
         $this->loadCacheDriver('query_cache', $entityManager['name'], $entityManager['query_cache_driver'], $container);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    protected function loadDbalCacheDriver($cacheName, $connectionName, array $cacheDriver, ContainerBuilder $container): string
+    {
+        $aliasId = $this->getDbalElementName(sprintf('%s_%s', $connectionName, $cacheName));
+
+        switch ($cacheDriver['type'] ?? 'pool') {
+            case 'service':
+                $serviceId = $cacheDriver['id'];
+                break;
+
+            case 'pool':
+                $serviceId = $cacheDriver['pool'] ?? $this->createArrayAdapterCachePool($container, $connectionName, $cacheName);
+                break;
+
+            default:
+                throw new \InvalidArgumentException(sprintf(
+                    'Unknown cache of type "%s" configured for cache "%s" in entity manager "%s".',
+                    $cacheDriver['type'],
+                    $cacheName,
+                    $connectionName
+                ));
+        }
+
+        $container->setAlias($aliasId, new Alias($serviceId, false));
+
+        return $aliasId;
+    }
+
+    protected function getDbalElementName($name): string
+    {
+        return 'doctrine.dbal.' . $name;
+    }
+
+    protected function loadDbalCacheDrivers(string $name, array $connection, ContainerBuilder $container)
+    {
+        $this->loadDbalCacheDriver('result_cache', $name, $connection['result_cache_driver'], $container);
     }
 
     private function createMetadataCache(string $objectManagerName, ContainerBuilder $container): void
